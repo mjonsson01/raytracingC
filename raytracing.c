@@ -35,7 +35,7 @@ struct LightRay
 //     *red = (color >> 24) & 0xFF;  // Extract Red (8 bits)
 //     *green = (color >> 16) & 0xFF;  // Extract Green (8 bits)
 //     *blue = (color >> 8) & 0xFF;   // Extract Blue (8 bits)
-//     *alhpa = color & 0xFF;           // Extract Alpha (8 bits)
+//     *alpha = color & 0xFF;           // Extract Alpha (8 bits)
 // }
 
 
