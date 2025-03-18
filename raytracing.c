@@ -9,7 +9,7 @@
 #define RAY_NUMBER 400
 
 
-
+// TODO, add rectangles
 struct RenderObject 
 {
     double x;
@@ -202,7 +202,7 @@ int main() {
     }
     struct Circle light_circle = {{200, 200, 1},  80}; //Declared circle at (x,y)= (200,200) with r=80
 
-    struct Circle occluding_circle = {{600, 300, 1}, 140};//Declared circle at (x,y)= (500,300) with r=140)
+    struct Circle occluding_circle = {{600, 300, 1}, 40};//Declared circle at (x,y)= (500,300) with r=140)
     // animation variable
     struct LightRay rays[RAY_NUMBER];
     // generate initial rays so mouse click doesn't cause them to pop in
