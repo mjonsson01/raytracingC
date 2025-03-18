@@ -3,10 +3,17 @@
         {
             "name": "Mac",
             "includePath": [
-                "${workspaceFolder}/**"
+                "${workspaceFolder}/**",
+                "/usr/local/include",
+                "/usr/local/lib",
+                "/opt/homebrew/lib",
+                "/opt/homebrew/include",
+                "/opt/homebrew/opt",
+                "/opt/homebrew/opt/sdl2/include",
+                "/Library/Developer/CommandLineTools/usr/include/c++/v1"
             ],
             "defines": [],
-            "compilerPath": "/opt/homebrew/bin/gcc-14",
+            "compilerPath": "/usr/bin/gcc",
             "cStandard": "c17",
             "cppStandard": "c++17",
             "intelliSenseMode": "macos-clang-arm64"
