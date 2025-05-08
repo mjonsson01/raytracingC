@@ -6,9 +6,10 @@
 
 #define WIDTH 900
 #define HEIGHT 600
-#define RAY_NUMBER 400
-#define OCCLUDINGCIRCLESIZE 140
-#define LIGHTCIRCLESIZE 180
+#define RAY_NUMBER 275
+#define OCCLUDINGCIRCLESIZE 80
+#define LIGHTCIRCLESIZE 60
+#define FALLOFF 5.0
 
 
 // TODO, add rectangles
@@ -85,7 +86,7 @@ bool RayCircleIntersection(struct LightRay ray, struct Circle circle, double *t_
 
     return false; // Ray starts inside the circle
 }
-void FillRays(SDL_Renderer* renderer, struct LightRay rays[RAY_NUMBER], struct Circle occluding_circle){
+void FillRays(SDL_Renderer* renderer, struct LightRay rays[RAY_NUMBER], struct Circle occluding_circle,double falloffFactor){
     for (int i = 0; i< RAY_NUMBER; i++){
         struct LightRay r = rays[i];
         
@@ -97,8 +98,30 @@ void FillRays(SDL_Renderer* renderer, struct LightRay rays[RAY_NUMBER], struct C
             x_end = r.x_start + r.dx * t_nearest;
             y_end = r.y_start + r.dy * t_nearest;
         }
-        SDL_RenderDrawLine(renderer, r.x_start, r.y_start, x_end, y_end);
+        double max_distance = 1200;  // Keep this consistent
+        int steps = (int)(max_distance / 1.0);
+        
 
+        for (int j = 0; j < steps; j++) {
+            double t = (double)j / steps;
+            double x = r.x_start + r.dx * t * max_distance;
+            double y = r.y_start + r.dy * t * max_distance;
+            
+            // But only draw if within actual end point
+            if ((x - r.x_start) * (x - r.x_start) + (y - r.y_start) * (y - r.y_start) <=
+                (x_end - r.x_start) * (x_end - r.x_start) + (y_end - r.y_start) * (y_end - r.y_start)) {
+            
+                double intensity = exp(-falloffFactor * t);
+                if (intensity < 0) intensity = 0;
+            
+                Uint8 red   = (Uint8)(255 * intensity);
+                Uint8 green = (Uint8)(223 * intensity);
+                Uint8 blue  = 0;
+            
+                SDL_SetRenderDrawColor(renderer, red, green, blue, 255);
+                SDL_RenderDrawPoint(renderer, (int)x, (int)y);
+            }            
+        }
     }
 }
 
@@ -249,7 +272,8 @@ int main() {
         }
     }
 
-        bool collision = ObjectCollisionHandle((struct RenderObject*)&light_circle, (struct RenderObject*)&occluding_circle);
+        // bool collision = ObjectCollisionHandle((struct RenderObject*)&light_circle, (struct RenderObject*)&occluding_circle);
+        bool collision = false;
         if (!collision){
             SDL_SetRenderDrawColor(renderer, 0, 0, 0, 255);
             SDL_RenderClear(renderer);
@@ -257,7 +281,7 @@ int main() {
             FillCircle(renderer, light_circle);
             FillCircle(renderer, occluding_circle);
             SDL_SetRenderDrawColor(renderer, 255, 223, 0, 255);//golden yellow
-            FillRays(renderer,rays, occluding_circle);
+            FillRays(renderer,rays, occluding_circle, FALLOFF);
             SDL_RenderPresent(renderer);
         }else{
             SDL_SetRenderDrawColor(renderer, 0, 0, 0, 255);  // Set background to black
