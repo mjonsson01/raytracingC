@@ -20,7 +20,7 @@ struct RenderObject
     double x;
     double y;
     int type;
-    void (*CollisionDetect)(struct RenderObject*, struct RenderObject*);  // Pointer to collision detection function
+    bool (*CollisionDetect)(struct RenderObject*, struct RenderObject*);  // Pointer to collision detection function
     void (*Render)(struct RenderObject*, SDL_Renderer*);
 };
 struct Circle
@@ -215,21 +215,6 @@ void FillBouncingRays(SDL_Renderer* renderer, struct LightRay rays[RAY_NUMBER], 
                 Uint8 r = (Uint8)(255 * (intensity_start + intensity_end) / 2);
                 Uint8 g = (Uint8)(223 * (intensity_start + intensity_end) / 2);
 
-                // SDL_SetRenderDrawColor(renderer, r, g, 0, 255);
-                // SDL_RenderDrawLine(renderer, (int)xs, (int)ys, (int)xe, (int)ye);
-
-                /////RESTORE
-                // int ix = (int)xs;
-                // int iy = (int)ys;
-
-                // if (ix >= 0 && ix < WIDTH && iy >= 0 && iy < HEIGHT) {
-                //     float intensity = (intensity_start + intensity_end) / 2.0f;
-                //     if (intensity > brightness_buffer[ix][iy]) {
-                //         brightness_buffer[ix][iy] = intensity;
-                //         SDL_SetRenderDrawColor(renderer, r, g, 0, 255);
-                //         SDL_RenderDrawPoint(renderer, ix, iy);
-                //     }
-                // }
                 int ix0 = (int)xs;
                 int iy0 = (int)ys;
                 int ix1 = (int)xe;
@@ -239,20 +224,10 @@ void FillBouncingRays(SDL_Renderer* renderer, struct LightRay rays[RAY_NUMBER], 
                     ix1 >= 0 && ix1 < WIDTH && iy1 >= 0 && iy1 < HEIGHT) {
                     float avg_intensity = (intensity_start + intensity_end) / 2.0f;
 
-                    // Use brighter of either endpoint for buffer
-                    // if (avg_intensity > brightness_buffer[ix0][iy0] ||
-                    //     avg_intensity > brightness_buffer[ix1][iy1]) {
 
-                    //     // Update both points in the buffer
-                    //     brightness_buffer[ix0][iy0] = fmax(brightness_buffer[ix0][iy0], avg_intensity);
-                    //     brightness_buffer[ix1][iy1] = fmax(brightness_buffer[ix1][iy1], avg_intensity);
-
-                    //     SDL_SetRenderDrawColor(renderer, r, g, 0, 255);
-                    //     SDL_RenderDrawLine(renderer, ix0, iy0, ix1, iy1);
-                    // }
                     bool can_draw = true;
 
-                    // Check all pixels on the line before drawing
+                    // Check all pixels on the line before drawing. a little slow but massively improved visual fidelity.
                     int dx = abs(ix1 - ix0);
                     int dy = abs(iy1 - iy0);
                     int sx = ix0 < ix1 ? 1 : -1;
@@ -305,41 +280,24 @@ void FillBouncingRays(SDL_Renderer* renderer, struct LightRay rays[RAY_NUMBER], 
                 ReflectRayOverCircle(&ray, x2, y2, occluder);
                 dx = ray.dx;
                 dy = ray.dy;
-                //NEW
                 // Stop if ray hit the occluder and we're not on the first bounce
                 if (bounces > 0 && t_circle <= t_wall) {
                     break;
                 }
             } else {
+                // reflect off walls
                 if (t_wall == tx) dx = -dx;
                 if (t_wall == ty) dy = -dy;
             }
             
 
-            // // Reflect off walls
-            // if (t_wall == tx) dx = -dx;
-            // if (t_wall == ty) dy = -dy;
+
 
             bounces++;
         }
     }
 }
 
-// Stationary Object Collision
-// bool CircleCollisionHandle(struct RenderObject* obj1, struct RenderObject* obj2) {
-//     struct Circle* circle1 = (struct Circle*) obj1;
-//     struct Circle* circle2 = (struct Circle*) obj2;
-
-//     double dx = circle1->base.x - circle2->base.x;
-//     double dy = circle1->base.y - circle2->base.y;
-    
-//     double distance_squared = dx * dx + dy * dy;
-//     double radius_sum = circle1->radius + circle2->radius;
-//     double radius_sum_squared = radius_sum * radius_sum;
-
-//     // Check if the distance between centers is less than or equal to the sum of radii
-//     return distance_squared <= radius_sum_squared;
-// }
 
 
 bool CircleCollisionHandle(struct RenderObject* obj1, struct RenderObject* obj2) {
@@ -398,7 +356,6 @@ void GenerateCircleRays(struct Circle circle, struct LightRay rays[RAY_NUMBER]) 
         struct LightRay ray = {circle.base.x, circle.base.y, dx, dy};
         rays[i] = ray;
 
-        // For debugging: print out the angle and its direction
         // printf("Ray %d: angle = %f radians (%f degrees), dx = %f, dy = %f\n", i, angle, angle * (180.0 / M_PI), dx, dy);
     }
 }
@@ -444,8 +401,11 @@ int main() {
     }
 
     struct Circle light_circle = {{200, 200, 1},  LIGHTCIRCLESIZE}; //Declared circle at (x,y)= (200,200) with r=80
-
+    light_circle.base.CollisionDetect = ObjectCollisionHandle;
+    
+    
     struct Circle occluding_circle = {{600, 300, 1}, OCCLUDINGCIRCLESIZE};
+    occluding_circle.base.CollisionDetect = ObjectCollisionHandle;
     // animation variable
     struct LightRay rays[RAY_NUMBER];
     // generate initial rays so mouse click doesn't cause them to pop in
@@ -500,11 +460,6 @@ int main() {
             selected_circle = NULL; // Release selection
         }
 
-        // if (event.type == SDL_MOUSEMOTION && selected_circle) {
-        //     selected_circle->base.x = event.motion.x;
-        //     selected_circle->base.y = event.motion.y;
-        //     GenerateCircleRays(light_circle, rays); // Recalculate rays for light source
-        // }
         if (event.type == SDL_MOUSEMOTION && selected_circle) {
             double new_x = event.motion.x;
             double new_y = event.motion.y;
@@ -527,7 +482,8 @@ int main() {
     }
 
         // bool collision = ObjectCollisionHandle((struct RenderObject*)&light_circle, (struct RenderObject*)&occluding_circle);
-        bool collision = false;
+        // bool collision = false;
+        bool collision = light_circle.base.CollisionDetect((struct RenderObject*)&light_circle, (struct RenderObject*)&occluding_circle);
         // clear and draw scene
         SDL_SetRenderDrawColor(renderer, 0, 0, 0, 255);
         for (int x = 0; x < WIDTH; x++) {
@@ -542,13 +498,13 @@ int main() {
         FillCircle(renderer, light_circle);
         FillCircle(renderer, occluding_circle);
 
-        // draw rays only if light is on and there's no collision
-        if (light_on && !collision) {
+        // draw rays only if light is on (don't care about collision status)
+        if (light_on) {
             SDL_SetRenderDrawColor(renderer, 255, 223, 0, 255);
             FillBouncingRays(renderer, rays, occluding_circle, light_circle, FALLOFF);
         }
 
-        // ✅ Always draw the toggle button
+        // Always draw the toggle button
         SDL_SetRenderDrawColor(renderer, 100, 100, 100, 255);
         SDL_RenderFillRect(renderer, &button_rect);
 
@@ -577,43 +533,6 @@ int main() {
         }
 
         SDL_RenderPresent(renderer);
-
-        // if (!collision){
-        //     SDL_SetRenderDrawColor(renderer, 0, 0, 0, 255);
-        //     for (int x = 0; x < WIDTH; x++) {
-        //         for (int y = 0; y < HEIGHT; y++) {
-        //             brightness_buffer[x][y] = 0.0f;
-        //             }
-        //         }
-
-        //     SDL_RenderClear(renderer);
-        //     SDL_SetRenderDrawColor(renderer, 255, 255, 255, 255);
-        //     FillCircle(renderer, light_circle);
-        //     FillCircle(renderer, occluding_circle);
-        //     SDL_SetRenderDrawColor(renderer, 255, 223, 0, 255);//golden yellow
-        //     FillBouncingRays(renderer, rays, occluding_circle, light_circle, FALLOFF);
-        //     SDL_RenderPresent(renderer);
-        // }else{
-        //     SDL_SetRenderDrawColor(renderer, 0, 0, 0, 255);  // Set background to black
-        //     for (int x = 0; x < WIDTH; x++) {
-        //         for (int y = 0; y < HEIGHT; y++) {
-        //             brightness_buffer[x][y] = 0.0f;
-        //         }
-        //     }
-
-        //     SDL_RenderClear(renderer);  // Clear the screen
-        //     // Draw the button
-        //     SDL_SetRenderDrawColor(renderer, 100, 100, 100, 255);  // Gray button background
-        //     SDL_RenderFillRect(renderer, &button_rect);
-
-        //     // Draw a border
-        //     SDL_SetRenderDrawColor(renderer, 255, 255, 255, 255);  // White border
-        //     SDL_RenderDrawRect(renderer, &button_rect);
-
-
-        //     SDL_SetRenderDrawColor(renderer, 255, 255, 255, 255);  // Set drawing color to white
-        //     FillCircle(renderer, light_circle);  // Draw the main circle
-        // }
         SDL_Delay(10); // Small delay to reduce CPU usage 100 fps
     }
     //Clear Windows
