@@ -1,15 +1,17 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <SDL2/SDL.h>
+#include <SDL2/SDL_ttf.h>
 #include <math.h>
 #include <stdbool.h>
 
 #define WIDTH 900
 #define HEIGHT 600
-#define RAY_NUMBER 275
+#define RAY_NUMBER 400
 #define OCCLUDINGCIRCLESIZE 80
 #define LIGHTCIRCLESIZE 60
-#define FALLOFF 5.0
+#define FALLOFF 2.5
+bool light_on = true;
 
 
 // TODO, add rectangles
@@ -33,6 +35,8 @@ struct LightRay
     double x_start,y_start; //position it starts
     double dx, dy; //direction it points. useful for Fill Rays.
 };
+float brightness_buffer[WIDTH][HEIGHT] = {0};  // Zero-initialized
+
 //Won't implement for now. Would have been nice for color inputs
 // void ExtractColors(Uint32 color, Uint8* red, Uint8* green, Uint8* blue, Uint8* alpha){
 //     *red = (color >> 24) & 0xFF;  // Extract Red (8 bits)
@@ -86,41 +90,237 @@ bool RayCircleIntersection(struct LightRay ray, struct Circle circle, double *t_
 
     return false; // Ray starts inside the circle
 }
-void FillRays(SDL_Renderer* renderer, struct LightRay rays[RAY_NUMBER], struct Circle occluding_circle,double falloffFactor){
-    for (int i = 0; i< RAY_NUMBER; i++){
-        struct LightRay r = rays[i];
-        
-        double max_expected_distance = 1200; // set to desired circle radius. Set to constant for easy computation
-        double x_end = r.x_start + r.dx * max_expected_distance;
-        double y_end = r.y_start + r.dy * max_expected_distance;
-        double t_nearest;
-        if (RayCircleIntersection(r, occluding_circle, &t_nearest)) {
-            x_end = r.x_start + r.dx * t_nearest;
-            y_end = r.y_start + r.dy * t_nearest;
-        }
-        double max_distance = 1200;  // Keep this consistent
-        int steps = (int)(max_distance / 1.0);
-        
 
-        for (int j = 0; j < steps; j++) {
-            double t = (double)j / steps;
-            double x = r.x_start + r.dx * t * max_distance;
-            double y = r.y_start + r.dy * t * max_distance;
+void ReflectRayOverCircle(struct LightRay* ray, double hit_x, double hit_y, struct Circle circle) {
+    // Compute surface normal at the point of impact
+    double nx = hit_x - circle.base.x;
+    double ny = hit_y - circle.base.y;
+
+    // Normalize the normal
+    double length = sqrt(nx * nx + ny * ny);
+    if (length == 0) return; // Avoid divide by zero
+    nx /= length;
+    ny /= length;
+
+    // Compute dot product of ray direction and normal
+    double dot = ray->dx * nx + ray->dy * ny;
+
+    // Reflect direction over normal
+    ray->dx = ray->dx - 2 * dot * nx;
+    ray->dy = ray->dy - 2 * dot * ny;
+
+    // Normalize the new direction
+    length = sqrt(ray->dx * ray->dx + ray->dy * ray->dy);
+    ray->dx /= length;
+    ray->dy /= length;
+}
+
+void FillBouncingRays(SDL_Renderer* renderer, struct LightRay rays[RAY_NUMBER], struct Circle occluder, struct Circle light_source, double falloff_factor) {
+
+    const double max_distance = 1200.0;
+    const double intensity_threshold = 0.01;
+    const int max_bounces = 10;
+
+    for (int i = 0; i < RAY_NUMBER; i++) {
+        double x = rays[i].x_start;
+        double y = rays[i].y_start;
+        double dx = rays[i].dx;
+        double dy = rays[i].dy;
+
+        double traveled = 0.0;
+        int bounces = 0;
+
+        while (bounces < max_bounces) {
+            // Step 1: Determine distance to each wall
+            double tx = dx > 0 ? (WIDTH - x) / dx : (dx < 0 ? (0 - x) / dx : 1e9);
+            double ty = dy > 0 ? (HEIGHT - y) / dy : (dy < 0 ? (0 - y) / dy : 1e9);
+            double t_wall = fmin(tx, ty);
+            // Step 2: Determine distance to occluders
+            double t_circle = 1e9;
+            double t_nearest = 1e9;
+            bool hit_light = false;
+
+            struct LightRay ray = {x, y, dx, dy};
+
+            // Check occluding object
+            if (RayCircleIntersection(ray, occluder, &t_nearest) && t_nearest > 0) {
+                t_circle = t_nearest;
+            }
+
+            // Check light source if not the first segment
+            if (bounces > 0) {
+                double t_light;
+                if (RayCircleIntersection(ray, light_source, &t_light) && t_light > 0) {
+                    if (t_light < t_circle) {
+                        t_circle = t_light;
+                        hit_light = true;  // Mark that we hit the light source
+                    }
+                }
+            }
+
+
+
+
+
+            // Step 3: Choose minimum valid t
+            double t_min = fmin(t_wall, t_circle);
+
+            // Step 4: Clip to remaining max distance
+            double segment_length = t_min;
+            if (traveled + segment_length > max_distance) {
+                segment_length = max_distance - traveled;
+            }
+
+            double x2 = x + dx * segment_length;
+            double y2 = y + dy * segment_length;
+
+            //Makes a weird light source shadow effect
+            // // If the ray hits the light source on a later bounce, terminate
+            // if (bounces > 0 && hit_light) {
+            //     break;
+            // }
+
+            // Step 5: Compute falloff at segment start and end
+            double t0 = traveled / max_distance;
+            double t1 = (traveled + segment_length) / max_distance;
+            double intensity0 = exp(-falloff_factor * t0);
+            double intensity1 = exp(-falloff_factor * t1);
+
+            if (intensity0 < intensity_threshold) break;
+
+            Uint8 r0 = (Uint8)(255 * intensity0);
+            Uint8 g0 = (Uint8)(223 * intensity0);
+            Uint8 r1 = (Uint8)(255 * intensity1);
+            Uint8 g1 = (Uint8)(223 * intensity1);
+
+            int steps = (int)(segment_length / 1.5);
+            if (steps < 1) steps = 1;
+
+            for (int s = 0; s < steps; s++) {
+                double s0 = (double)s / steps;
+                double s1 = (double)(s + 1) / steps;
+
+                double xs = x + dx * segment_length * s0;
+                double ys = y + dy * segment_length * s0;
+                double xe = x + dx * segment_length * s1;
+                double ye = y + dy * segment_length * s1;
+
+                double dist_start = traveled + segment_length * s0;
+                double dist_end   = traveled + segment_length * s1;
+
+                double intensity_start = exp(-falloff_factor * (dist_start / max_distance));
+                double intensity_end   = exp(-falloff_factor * (dist_end   / max_distance));
+                if (intensity_start < intensity_threshold) break;
+
+                Uint8 r = (Uint8)(255 * (intensity_start + intensity_end) / 2);
+                Uint8 g = (Uint8)(223 * (intensity_start + intensity_end) / 2);
+
+                // SDL_SetRenderDrawColor(renderer, r, g, 0, 255);
+                // SDL_RenderDrawLine(renderer, (int)xs, (int)ys, (int)xe, (int)ye);
+
+                /////RESTORE
+                // int ix = (int)xs;
+                // int iy = (int)ys;
+
+                // if (ix >= 0 && ix < WIDTH && iy >= 0 && iy < HEIGHT) {
+                //     float intensity = (intensity_start + intensity_end) / 2.0f;
+                //     if (intensity > brightness_buffer[ix][iy]) {
+                //         brightness_buffer[ix][iy] = intensity;
+                //         SDL_SetRenderDrawColor(renderer, r, g, 0, 255);
+                //         SDL_RenderDrawPoint(renderer, ix, iy);
+                //     }
+                // }
+                int ix0 = (int)xs;
+                int iy0 = (int)ys;
+                int ix1 = (int)xe;
+                int iy1 = (int)ye;
+
+                if (ix0 >= 0 && ix0 < WIDTH && iy0 >= 0 && iy0 < HEIGHT &&
+                    ix1 >= 0 && ix1 < WIDTH && iy1 >= 0 && iy1 < HEIGHT) {
+                    float avg_intensity = (intensity_start + intensity_end) / 2.0f;
+
+                    // Use brighter of either endpoint for buffer
+                    // if (avg_intensity > brightness_buffer[ix0][iy0] ||
+                    //     avg_intensity > brightness_buffer[ix1][iy1]) {
+
+                    //     // Update both points in the buffer
+                    //     brightness_buffer[ix0][iy0] = fmax(brightness_buffer[ix0][iy0], avg_intensity);
+                    //     brightness_buffer[ix1][iy1] = fmax(brightness_buffer[ix1][iy1], avg_intensity);
+
+                    //     SDL_SetRenderDrawColor(renderer, r, g, 0, 255);
+                    //     SDL_RenderDrawLine(renderer, ix0, iy0, ix1, iy1);
+                    // }
+                    bool can_draw = true;
+
+                    // Check all pixels on the line before drawing
+                    int dx = abs(ix1 - ix0);
+                    int dy = abs(iy1 - iy0);
+                    int sx = ix0 < ix1 ? 1 : -1;
+                    int sy = iy0 < iy1 ? 1 : -1;
+                    int err = dx - dy;
+                    int x = ix0, y = iy0;
+
+                    while (true) {
+                        if (x >= 0 && x < WIDTH && y >= 0 && y < HEIGHT) {
+                            if (avg_intensity <= brightness_buffer[x][y]) {
+                                can_draw = false;
+                                break;
+                            }
+                        }
+                        if (x == ix1 && y == iy1) break;
+                        int e2 = 2 * err;
+                        if (e2 > -dy) { err -= dy; x += sx; }
+                        if (e2 < dx)  { err += dx; y += sy; }
+                    }
+
+                    if (can_draw) {
+                        // Commit pixel updates and draw line
+                        x = ix0; y = iy0; err = dx - dy;
+                        while (true) {
+                            if (x >= 0 && x < WIDTH && y >= 0 && y < HEIGHT)
+                                brightness_buffer[x][y] = avg_intensity;
+                            if (x == ix1 && y == iy1) break;
+                            int e2 = 2 * err;
+                            if (e2 > -dy) { err -= dy; x += sx; }
+                            if (e2 < dx)  { err += dx; y += sy; }
+                        }
+
+                        SDL_SetRenderDrawColor(renderer, r, g, 0, 255);
+                        SDL_RenderDrawLine(renderer, ix0, iy0, ix1, iy1);
+                    }
+
+                }
+
+
+            }
+
+
+            // Step 6: Update state for next segment or exit
+            traveled += segment_length;
+            x = x2;
+            y = y2;
+
+            // if (t_circle <= t_wall) break; // HIT THE OCCLUDING CIRCLE — STOP
+            if (t_circle <= t_wall){
+                ReflectRayOverCircle(&ray, x2, y2, occluder);
+                dx = ray.dx;
+                dy = ray.dy;
+                //NEW
+                // Stop if ray hit the occluder and we're not on the first bounce
+                if (bounces > 0 && t_circle <= t_wall) {
+                    break;
+                }
+            } else {
+                if (t_wall == tx) dx = -dx;
+                if (t_wall == ty) dy = -dy;
+            }
             
-            // But only draw if within actual end point
-            if ((x - r.x_start) * (x - r.x_start) + (y - r.y_start) * (y - r.y_start) <=
-                (x_end - r.x_start) * (x_end - r.x_start) + (y_end - r.y_start) * (y_end - r.y_start)) {
-            
-                double intensity = exp(-falloffFactor * t);
-                if (intensity < 0) intensity = 0;
-            
-                Uint8 red   = (Uint8)(255 * intensity);
-                Uint8 green = (Uint8)(223 * intensity);
-                Uint8 blue  = 0;
-            
-                SDL_SetRenderDrawColor(renderer, red, green, blue, 255);
-                SDL_RenderDrawPoint(renderer, (int)x, (int)y);
-            }            
+
+            // // Reflect off walls
+            // if (t_wall == tx) dx = -dx;
+            // if (t_wall == ty) dy = -dy;
+
+            bounces++;
         }
     }
 }
@@ -210,6 +410,13 @@ int main() {
         printf("SDL_Init Error: %s\n", SDL_GetError());
         return 1;
     }
+    //initialize ttf 
+    if (TTF_Init() != 0) {
+    printf("TTF_Init Error: %s\n", TTF_GetError());
+    SDL_Quit();
+    return 1;
+    }
+
     //CREATE WINDOW
     SDL_Window* window = SDL_CreateWindow("Raytracing Demo", SDL_WINDOWPOS_CENTERED, SDL_WINDOWPOS_CENTERED, WIDTH, HEIGHT, SDL_WINDOW_SHOWN);
     if (!window) {
@@ -217,14 +424,25 @@ int main() {
         SDL_Quit();
         return 1;
     }
+    //Light Switch Button
+    SDL_Rect button_rect = {10, 10, 120, 40};
+
     // Create Renderer
-    SDL_Renderer* renderer = SDL_CreateRenderer(window, -1, SDL_RENDERER_ACCELERATED | SDL_RENDERER_PRESENTVSYNC);
+    // SDL_Renderer* renderer = SDL_CreateRenderer(window, -1, SDL_RENDERER_ACCELERATED | SDL_RENDERER_PRESENTVSYNC);
+    SDL_Renderer* renderer = SDL_CreateRenderer(window, -1, SDL_RENDERER_ACCELERATED );
     if (!renderer) {
         printf("SDL_CreateRenderer Error: %s\n", SDL_GetError());
         SDL_DestroyWindow(window);
         SDL_Quit();
         return 1;
     }
+    TTF_Font* font = TTF_OpenFont("/Library/Fonts/Arial Unicode.ttf", 20); // or your system's path to a .ttf
+    if (!font) {
+        printf("TTF_OpenFont Error: %s\n", TTF_GetError());
+        SDL_Quit();
+        return 1;
+    }
+
     struct Circle light_circle = {{200, 200, 1},  LIGHTCIRCLESIZE}; //Declared circle at (x,y)= (200,200) with r=80
 
     struct Circle occluding_circle = {{600, 300, 1}, OCCLUDINGCIRCLESIZE};
@@ -243,6 +461,23 @@ int main() {
                 running = 0;
             }
             if (event.type == SDL_MOUSEBUTTONDOWN) {
+                if (event.button.button == SDL_BUTTON_LEFT) {
+                    int mx = event.button.x;
+                    int my = event.button.y;
+
+                    if (mx >= button_rect.x && mx <= button_rect.x + button_rect.w &&
+                        my >= button_rect.y && my <= button_rect.y + button_rect.h) {
+                        light_on = !light_on;
+                        if (light_on) {
+                            GenerateCircleRays(light_circle, rays);
+                        } else {
+                            // Set all rays to zero vectors
+                            for (int i = 0; i < RAY_NUMBER; i++) {
+                                rays[i] = (struct LightRay){0, 0, 0, 0};
+                            }
+                        }
+                    }
+                }
             double mx = event.button.x;
             double my = event.button.y;
 
@@ -265,31 +500,120 @@ int main() {
             selected_circle = NULL; // Release selection
         }
 
+        // if (event.type == SDL_MOUSEMOTION && selected_circle) {
+        //     selected_circle->base.x = event.motion.x;
+        //     selected_circle->base.y = event.motion.y;
+        //     GenerateCircleRays(light_circle, rays); // Recalculate rays for light source
+        // }
         if (event.type == SDL_MOUSEMOTION && selected_circle) {
-            selected_circle->base.x = event.motion.x;
-            selected_circle->base.y = event.motion.y;
-            GenerateCircleRays(light_circle, rays); // Recalculate rays for light source
+            double new_x = event.motion.x;
+            double new_y = event.motion.y;
+
+            // Clamp to window bounds
+            double r = selected_circle->radius;
+            if (new_x < r) new_x = r;
+            if (new_x > WIDTH - r) new_x = WIDTH - r;
+            if (new_y < r) new_y = r;
+            if (new_y > HEIGHT - r) new_y = HEIGHT - r;
+
+
+            selected_circle->base.x = new_x;
+            selected_circle->base.y = new_y;
+
+            if (selected_circle == &light_circle)
+                GenerateCircleRays(light_circle, rays); // Recalculate rays only if light moved
         }
+
     }
 
         // bool collision = ObjectCollisionHandle((struct RenderObject*)&light_circle, (struct RenderObject*)&occluding_circle);
         bool collision = false;
-        if (!collision){
-            SDL_SetRenderDrawColor(renderer, 0, 0, 0, 255);
-            SDL_RenderClear(renderer);
-            SDL_SetRenderDrawColor(renderer, 255, 255, 255, 255);
-            FillCircle(renderer, light_circle);
-            FillCircle(renderer, occluding_circle);
-            SDL_SetRenderDrawColor(renderer, 255, 223, 0, 255);//golden yellow
-            FillRays(renderer,rays, occluding_circle, FALLOFF);
-            SDL_RenderPresent(renderer);
-        }else{
-            SDL_SetRenderDrawColor(renderer, 0, 0, 0, 255);  // Set background to black
-            SDL_RenderClear(renderer);  // Clear the screen
-
-            SDL_SetRenderDrawColor(renderer, 255, 255, 255, 255);  // Set drawing color to white
-            FillCircle(renderer, light_circle);  // Draw the main circle
+        // clear and draw scene
+        SDL_SetRenderDrawColor(renderer, 0, 0, 0, 255);
+        for (int x = 0; x < WIDTH; x++) {
+            for (int y = 0; y < HEIGHT; y++) {
+                brightness_buffer[x][y] = 0.0f;
+            }
         }
+        SDL_RenderClear(renderer);
+
+        // draw objects
+        SDL_SetRenderDrawColor(renderer, 255, 255, 255, 255);
+        FillCircle(renderer, light_circle);
+        FillCircle(renderer, occluding_circle);
+
+        // draw rays only if light is on and there's no collision
+        if (light_on && !collision) {
+            SDL_SetRenderDrawColor(renderer, 255, 223, 0, 255);
+            FillBouncingRays(renderer, rays, occluding_circle, light_circle, FALLOFF);
+        }
+
+        // ✅ Always draw the toggle button
+        SDL_SetRenderDrawColor(renderer, 100, 100, 100, 255);
+        SDL_RenderFillRect(renderer, &button_rect);
+
+        SDL_SetRenderDrawColor(renderer, 255, 255, 255, 255);
+        SDL_RenderDrawRect(renderer, &button_rect);
+        // Create surface and texture for label
+        SDL_Color textColor = {255, 255, 255};
+        const char* label_text = light_on ? "LIGHT ON" : "LIGHT OFF";
+
+        SDL_Surface* textSurface = TTF_RenderText_Blended(font, label_text, textColor);
+        if (textSurface) {
+            SDL_Texture* textTexture = SDL_CreateTextureFromSurface(renderer, textSurface);
+            if (textTexture) {
+                int textW, textH;
+                SDL_QueryTexture(textTexture, NULL, NULL, &textW, &textH);
+                SDL_Rect textRect = {
+                    button_rect.x + (button_rect.w - textW) / 2,
+                    button_rect.y + (button_rect.h - textH) / 2,
+                    textW,
+                    textH
+                };
+                SDL_RenderCopy(renderer, textTexture, NULL, &textRect);
+                SDL_DestroyTexture(textTexture);
+            }
+            SDL_FreeSurface(textSurface);
+        }
+
+        SDL_RenderPresent(renderer);
+
+        // if (!collision){
+        //     SDL_SetRenderDrawColor(renderer, 0, 0, 0, 255);
+        //     for (int x = 0; x < WIDTH; x++) {
+        //         for (int y = 0; y < HEIGHT; y++) {
+        //             brightness_buffer[x][y] = 0.0f;
+        //             }
+        //         }
+
+        //     SDL_RenderClear(renderer);
+        //     SDL_SetRenderDrawColor(renderer, 255, 255, 255, 255);
+        //     FillCircle(renderer, light_circle);
+        //     FillCircle(renderer, occluding_circle);
+        //     SDL_SetRenderDrawColor(renderer, 255, 223, 0, 255);//golden yellow
+        //     FillBouncingRays(renderer, rays, occluding_circle, light_circle, FALLOFF);
+        //     SDL_RenderPresent(renderer);
+        // }else{
+        //     SDL_SetRenderDrawColor(renderer, 0, 0, 0, 255);  // Set background to black
+        //     for (int x = 0; x < WIDTH; x++) {
+        //         for (int y = 0; y < HEIGHT; y++) {
+        //             brightness_buffer[x][y] = 0.0f;
+        //         }
+        //     }
+
+        //     SDL_RenderClear(renderer);  // Clear the screen
+        //     // Draw the button
+        //     SDL_SetRenderDrawColor(renderer, 100, 100, 100, 255);  // Gray button background
+        //     SDL_RenderFillRect(renderer, &button_rect);
+
+        //     // Draw a border
+        //     SDL_SetRenderDrawColor(renderer, 255, 255, 255, 255);  // White border
+        //     SDL_RenderDrawRect(renderer, &button_rect);
+
+
+        //     SDL_SetRenderDrawColor(renderer, 255, 255, 255, 255);  // Set drawing color to white
+        //     FillCircle(renderer, light_circle);  // Draw the main circle
+        // }
         SDL_Delay(10); // Small delay to reduce CPU usage 100 fps
     }
     //Clear Windows
