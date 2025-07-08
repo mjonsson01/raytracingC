@@ -10,7 +10,7 @@
 #define RAY_NUMBER 400
 #define OCCLUDINGCIRCLESIZE 80
 #define LIGHTCIRCLESIZE 60
-#define FALLOFF 2.5
+#define FALLOFF 2.0
 bool light_on = true;
 
 
@@ -483,8 +483,15 @@ int main() {
 
         // bool collision = ObjectCollisionHandle((struct RenderObject*)&light_circle, (struct RenderObject*)&occluding_circle);
         // bool collision = false;
+        // Save old position before collision check
+        double old_x = light_circle.base.x;
+        double old_y = light_circle.base.y;
         bool collision = light_circle.base.CollisionDetect((struct RenderObject*)&light_circle, (struct RenderObject*)&occluding_circle);
         // clear and draw scene
+        // If the light was moved due to collision, regenerate rays
+        if (collision && (light_circle.base.x != old_x || light_circle.base.y != old_y)) {
+            GenerateCircleRays(light_circle, rays);
+        }
         SDL_SetRenderDrawColor(renderer, 0, 0, 0, 255);
         for (int x = 0; x < WIDTH; x++) {
             for (int y = 0; y < HEIGHT; y++) {
